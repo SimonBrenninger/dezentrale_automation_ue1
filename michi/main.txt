@@ -1,0 +1,409 @@
+// Eisen:           Beschichtung A
+// Aluminium:       Beschichtung A
+// Plastik Hell:    Beschichtung B
+// Plastik Dunkel:  Beschichtung C
+
+"SV".state := "SV".next_state;
+"DV".encoder_rel_pos := "Encoder" - #ENCODER_REF;
+
+
+IF "SV".idle_flag = 1 AND "DV".prev_clock <> "Clock_1Hz" THEN
+    "Leds" := "Leds" XOR 16#FF;
+    "DV".prev_clock := "Clock_1Hz";
+END_IF;
+
+// -------------------------------------------------- TIMER --------------------------------------------------
+
+"TIMER_1S".TP(IN := "DV".tim1s_trigger,
+              PT := T#1s,
+              ET => "DV".tim1s_et);
+
+"TIMER_2S".TP(IN := "DV".tim2s_trigger,
+              PT := T#2s,
+              ET => "DV".tim2s_et);
+
+"TIMER_3S".TP(IN:= "DV".tim3s_trigger,
+              PT:= T#3s,
+              ET=> "DV".tim3s_et);
+
+    
+// -------------------------------------------------- State logic --------------------------------------------------
+
+CASE "SV".state OF
+    #STATE_INIT:
+        "MotorGO" := 1;
+        "MotorDir" := 1;
+        
+        IF "MagED" = 1 THEN  // schlitten at init position
+            "SV".next_state := #STATE_CONTROL_1_DRIVE;
+        END_IF;
+        
+        // Kontrollfahrt
+    #STATE_CONTROL_1_DRIVE:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_CONTROL_2_DRIVE;
+        ELSIF "DV".encoder_rel_pos >= #STATION_1 THEN
+            "SV".return_state := #STATE_CONTROL_1_DRIVE;
+            "SV".next_state := #STATE_CONTROL_WAIT;
+        END_IF;
+        
+    #STATE_CONTROL_2_DRIVE:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_CONTROL_3_DRIVE;
+        ELSIF "DV".encoder_rel_pos >= #STATION_2 THEN
+            "SV".return_state := #STATE_CONTROL_2_DRIVE;
+            "SV".next_state := #STATE_CONTROL_WAIT;
+        END_IF;
+        
+    #STATE_CONTROL_3_DRIVE:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_CONTROL_4_DRIVE;
+        ELSIF "DV".encoder_rel_pos >= #STATION_3 THEN
+            "SV".return_state := #STATE_CONTROL_3_DRIVE;
+            "SV".next_state := #STATE_CONTROL_WAIT;
+        END_IF;
+        
+    #STATE_CONTROL_4_DRIVE:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_RESET;
+        ELSIF "DV".encoder_rel_pos >= #STATION_4 THEN
+            "SV".return_state := #STATE_CONTROL_4_DRIVE;
+            "SV".next_state := #STATE_CONTROL_WAIT;
+        END_IF;
+        
+    #STATE_CONTROL_WAIT:
+        "MotorGO" := 0;
+        "DV".tim1s_trigger := TRUE;
+        IF "DV".tim1s_et = T#1s THEN
+            "DV".tim1s_trigger := FALSE;
+            "SV".return_flag := 1;
+            "SV".next_state := "SV".return_state;
+        END_IF;
+        
+        // Automatischer Betrieb
+    #STATE_RESET:
+        // Reset state drives the schlitten back.
+        "MotorGO" := 1;
+        "MotorDir" := 1;
+        "DV".mtl_detect_s1 := 0;
+        "DV".mtl_detect_s2 := 0;
+        
+        IF "MagED" = 1 THEN
+            IF "SV".idle_flag = 1 THEN
+                "SV".next_state := #STATE_IDLE;
+            ELSE
+                "SV".next_state := #STATE_MTL_TAKE;
+            END_IF;
+        END_IF;
+        
+    #STATE_MTL_TAKE:
+        "MotorGO" := 0;
+        "Leds" := "Leds" AND 16#F0;
+        
+        IF "SV".idle_flag = 1 THEN
+            "SV".next_state := #STATE_IDLE;
+        END_IF;
+        
+        // If material was inserted, the process waits until it gets taken out.
+        // If no material was inserted, this state is skipped to STATE_MTL_WAIT.
+        IF "GlasLS" = 0 THEN
+            "SV".next_state := #STATE_MTL_WAIT;
+        END_IF;
+        
+    #STATE_MTL_WAIT:
+        IF "SV".idle_flag = 1 THEN
+            "SV".next_state := #STATE_IDLE;
+        END_IF;
+        
+        IF "GlasLS" = 1 AND "TasterStart" = 1 THEN    // Werkstueck eingelegt
+            "SV".next_state := #STATE_MTL_DETECT_1;
+        END_IF;
+        
+    #STATE_MTL_DETECT_1:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "DV".encoder_rel_pos >= #STATION_1 THEN   // Erste Station fuer Materialerkennung
+            "DV".mtl_detect_s1 := "IndNS_out";
+            "SV".next_state := #STATE_MTL_DETECT_2;
+        END_IF;
+        
+    #STATE_MTL_DETECT_2:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "DV".encoder_rel_pos >= #STATION_4 THEN   // Zweite Station fuer Materialerkennung
+            "DV".mtl_detect_s2 := "OptNS";
+            
+            // material detected, select correct process and set the state accordingly
+            IF "DV".mtl_detect_s1 = FALSE AND "DV".mtl_detect_s2 = FALSE THEN
+                "Leds" := "Leds" OR #LED_GRAY_PLASTIC;
+                "SV".next_state := #STATE_C1;
+            ELSIF "DV".mtl_detect_s1 = TRUE AND "DV".mtl_detect_s2 = FALSE THEN
+                "Leds" := "Leds" OR #LED_IRON;
+                "SV".next_state := #STATE_A1;
+            ELSIF "DV".mtl_detect_s1 = FALSE AND "DV".mtl_detect_s2 = TRUE THEN
+                "Leds" := "Leds" OR #LED_WHITE_PLASTIC;
+                "SV".next_state := #STATE_B1;
+            ELSE
+                "Leds" := "Leds" OR #LED_ALUMINIUM;
+                "SV".next_state := #STATE_A1;
+            END_IF;
+        END_IF;
+        
+    #STATE_A1:
+        "MotorGO" := 1;
+        "MotorDir" := 1;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_A2;
+        ELSIF "DV".encoder_rel_pos <= #STATION_1 THEN
+            "Leds" := "Leds" OR #LED_STATION_1;
+            "SV".next_state := #STATE_CYL_DOWN_3;
+            "SV".return_state := #STATE_A1;
+        END_IF;
+        
+    #STATE_A2:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_RESET;
+        ELSIF "DV".encoder_rel_pos >= #STATION_4 THEN
+            "Leds" := "Leds" OR #LED_STATION_4;
+            "SV".next_state := #STATE_CYL_DOWN_3;
+            "SV".return_state := #STATE_A2;
+        END_IF;
+        
+    #STATE_B1:
+        "MotorGO" := 1;
+        "MotorDir" := 1;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_B2;
+        ELSIF "DV".encoder_rel_pos <= #STATION_1 THEN
+            "Leds" := "Leds" OR #LED_STATION_1;
+            "SV".next_state := #STATE_CYL_DOWN_1;
+            "SV".return_state := #STATE_B1;
+        END_IF;
+        
+    #STATE_B2:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_RESET;
+        ELSIF "DV".encoder_rel_pos >= #STATION_3 THEN
+            "Leds" := "Leds" OR #LED_STATION_3;
+            "SV".next_state := #STATE_CYL_DOWN_1;
+            "SV".return_state := #STATE_B2;
+        END_IF;
+        
+    #STATE_C1:
+        "MotorGO" := 1;
+        "MotorDir" := 1;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_C2;
+        ELSIF "DV".encoder_rel_pos <= #STATION_1 THEN
+            "Leds" := "Leds" OR #LED_STATION_1;
+            "SV".next_state := #STATE_CYL_DOWN_1;
+            "SV".return_state := #STATE_C1;
+        END_IF;
+        
+    #STATE_C2:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_C3;
+        ELSIF "DV".encoder_rel_pos >= #STATION_2 THEN
+            "Leds" := "Leds" OR #LED_STATION_2;
+            "SV".next_state := #STATE_CYL_DOWN_2;
+            "SV".return_state := #STATE_C2;
+        END_IF;
+        
+    #STATE_C3:
+        "MotorGO" := 1;
+        "MotorDir" := 0;
+        
+        IF "SV".return_flag = 1 THEN
+            "Leds" := "Leds" AND 16#0F;
+            "SV".return_flag := 0;
+            "SV".next_state := #STATE_RESET;
+        ELSIF "DV".encoder_rel_pos >= #STATION_4 THEN
+            "Leds" := "Leds" OR #LED_STATION_4;
+            "SV".next_state := #STATE_CYL_DOWN_2;
+            "SV".return_state := #STATE_C3;
+        END_IF;
+        
+    #STATE_CYL_DOWN_1:
+        "MotorGO" := 0;
+        "ZylDown" := 1;
+        "DV".tim1s_trigger := 1;
+        IF "DV".tim1s_et = T#1s THEN
+            "DV".tim1s_trigger := 0;
+            "ZylDown" := 0;
+            "SV".next_state := #STATE_CYL_UP_1;
+        END_IF;
+        
+    #STATE_CYL_UP_1:
+        "ZylUp" := 1;
+        "DV".tim1s_trigger := 1;
+        IF "DV".tim1s_et = T#1s THEN
+            "DV".tim1s_trigger := 0;
+            "ZylUp" := 0;
+            "SV".return_flag := 1;
+            "SV".next_state := "SV".return_state;
+        END_IF;
+        
+    #STATE_CYL_DOWN_2:
+        "MotorGO" := 0;
+        "ZylDown" := 1;
+        "DV".tim2s_trigger := 1;
+        IF "DV".tim2s_et = T#2s THEN
+            "DV".tim2s_trigger := 0;
+            "ZylDown" := 0;
+            "SV".next_state := #STATE_CYL_UP_2;
+        END_IF;
+        
+    #STATE_CYL_UP_2:
+        "ZylUp" := 1;
+        "DV".tim1s_trigger := 1;
+        IF "DV".tim1s_et = T#1s THEN
+            "DV".tim1s_trigger := 0;
+            "ZylUp" := 0;
+            "SV".return_flag := 1;
+            "SV".next_state := "SV".return_state;
+        END_IF;
+        
+    #STATE_CYL_DOWN_3:
+        "MotorGO" := 0;
+        "ZylDown" := 1;
+        "DV".tim3s_trigger := 1;
+        IF "DV".tim3s_et = T#3s THEN
+            "DV".tim3s_trigger := 0;
+            "ZylDown" := 0;
+            "SV".next_state := #STATE_CYL_UP_3;
+        END_IF;
+        
+    #STATE_CYL_UP_3:
+        "ZylUp" := 1;
+        "DV".tim1s_trigger := 1;
+        IF "DV".tim1s_et = T#1s THEN
+            "DV".tim1s_trigger := 0;
+            "ZylUp" := 0;
+            "SV".return_flag := 1;
+            "SV".next_state := "SV".return_state;
+        END_IF;
+        
+    #STATE_MANUAL:
+        "Leds" := 16#0;
+        "SV".idle_flag := 0;
+        IF "ManualMode" = 0 THEN
+            "SV".next_state := #STATE_RESET;
+        END_IF;
+        
+        "ZylDown" := "TasterStart";
+        "ZylUp" := "TasterCyl";
+        
+        IF "Joystick" > 16#F000 THEN
+            "MotorGO" := 1;
+            "MotorDir" := 1;
+        ELSIF "Joystick" > 100 THEN
+            "MotorGO" := 1;
+            "MotorDir" := 0;
+        ELSE
+            "MotorGO" := 0;
+        END_IF;
+        
+    #STATE_ERROR:
+        "SV".idle_flag := 0;
+        "MotorGO" := 0;
+        "Leds" := 16#0;
+        IF "TasterReset" = 1 THEN
+            "SV".next_state := #STATE_RESET;
+        END_IF;
+        
+    #STATE_IDLE:
+        "MotorGO" := 0;
+        "SV".idle_flag := 0;
+        "Leds" := 16#0;
+        IF "TasterStart" = 1 THEN
+            "SV".next_state := #STATE_INIT;
+        END_IF;
+        
+END_CASE;
+
+IF "SV".state = #STATE_IDLE THEN
+    "LampeRed" := 0;
+    "LampeGreen" := 1;
+    "LampeYellow" := 0;
+ELSIF "SV".state = #STATE_MTL_TAKE OR "SV".state = #STATE_MTL_WAIT THEN
+    "LampeRed" := 0;
+    "LampeGreen" := 0;
+    "LampeYellow" := "Clock_1Hz";
+ELSIF "SV".state = #STATE_MANUAL THEN
+    "LampeRed" := "Clock_1Hz";
+    "LampeGreen" := 0;
+    "LampeYellow" := 0;
+ELSIF "SV".state = #STATE_ERROR THEN
+    "LampeRed" := 1;
+    "LampeGreen" := 0;
+    "LampeYellow" := 0;
+ELSE
+    "LampeRed" := 0;
+    "LampeGreen" := 0;
+    "LampeYellow" := 1;
+END_IF;
+
+// Async command to turn off the machine (set the machine into standby)
+IF "TasterCyl" = 1 AND "SV".state <> #STATE_IDLE AND "SV".state <> #STATE_MANUAL AND "SV".state <> #STATE_ERROR THEN
+    "SV".idle_flag := 1;
+END_IF;
+
+// Async command to turn the machine into the manual mode.
+IF "ManualMode" = 1 AND "SV".state <> #STATE_MANUAL THEN
+    "SV".next_state := #STATE_MANUAL;
+END_IF;
+
+// Not aus
+IF "TasterError" = 1 AND "SV".state <> #STATE_ERROR THEN
+    "SV".next_state := #STATE_ERROR;
+END_IF;
+
+// Async error check
+IF "EinLS" = 1 THEN
+    "SV".next_state := #STATE_ERROR;
+END_IF;
+IF "GlasLS" = 0 AND "SV".state >= #STATE_MTL_DETECT_1 AND "SV".state <= #STATE_CYL_DOWN_3 THEN
+    "SV".next_state := #STATE_ERROR;
+END_IF;
