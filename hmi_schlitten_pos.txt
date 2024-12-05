@@ -1,0 +1,10 @@
+schlitten: 36-380 -> 0...344
+
+encoder: 0x00...0x50A86
+
+schlitten = encoder_relative / 0x50A86 * 344
+
+
+40-310 -> offset 0..270
+// update
+led positions (abs): [69.49996065065653, 160.23945588938597, 205.9659961134956, 267.39141094638194]

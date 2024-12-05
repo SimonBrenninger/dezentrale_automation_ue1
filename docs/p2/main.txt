@@ -1,0 +1,584 @@
+// latest code
+
+"lampe_grün" := "DB".led_grün;
+"lampe_gelb" := "DB".led_gelb;
+"lampe_rot" := "DB".led_rot;
+"DB".encoder_relative := "encoder" - "DB".encoder_reference;
+
+"IEC_Timer_0_DB".TP(IN := "DB".timer_1s_in,
+                    PT := #timer_1s,
+                    Q => "DB".timer_1s_out);
+
+"IEC_Timer_0_DB_1".TP(IN := "DB".timer_2s_in,
+                      PT := #timer_2s,
+                      Q => "DB".timer_2s_out);
+
+
+"IEC_Timer_0_DB_2".TP(IN := "DB".timer_3s_in,
+                      PT := #timer_3s,
+                      Q => "DB".timer_3s_out);
+
+// material leds
+IF "DB".material_state = #material_alu THEN
+    "led_alu" := 1;
+ELSE
+    "led_alu" := 0;
+END_IF;
+IF "DB".material_state = #material_eisen THEN
+    "led_eisen" := 1;
+ELSE
+    "led_eisen" := 0;
+END_IF;
+IF "DB".material_state = #material_kunststoff_hell THEN
+    "led_kunststoff_hell" := 1;
+ELSE
+    "led_kunststoff_hell" := 0;
+END_IF;
+IF "DB".material_state = #material_kunststoff_dunkel THEN
+    "led_kunststoff_dunkel" := 1;
+ELSE
+    "led_kunststoff_dunkel" := 0;
+END_IF;
+
+
+// behälter leds
+"led_station_1" := "DB".station_1;
+"led_station_2" := "DB".station_2;
+"led_station_3" := "DB".station_3;
+"led_station_4" := "DB".station_4;
+"DB".station_1 := 0;
+"DB".station_2 := 0;
+"DB".station_3 := 0;
+"DB".station_4 := 0;
+
+
+// update schlitten / position state
+"motor_start" := 0;
+"motor_direction" := 0;
+"DB".timer_1s_in := 0;
+"DB".timer_2s_in := 0;
+"DB".timer_3s_in := 0;
+
+
+CASE "DB".betrieb_state OF
+    #betrieb_decoder_kalibrieren:
+        IF "schlitten_unten" = 0 THEN
+            "motor_start" := 1;
+            "motor_direction" := 1;
+        END_IF;
+    #betrieb_kontrollfahrt:
+        "motor_start" := 0;
+        "motor_direction" := 0;
+        "DB".timer_1s_in := 0;
+        
+        IF "schlitten_unten" = 1 THEN
+            "DB".position_state := #position_anschlag_unten;
+        END_IF;
+        CASE "DB".position_state OF
+            #position_anschlag_unten:
+                "motor_start" := 1;
+                IF "DB".encoder_relative > #encoder_position_station_1 THEN
+                    "DB".timer_1s_in := 1;
+                    "DB".position_state := #position_station_1;
+                END_IF;
+            #position_station_1:
+                IF "DB".timer_1s_out = 0 THEN
+                    "motor_start" := 1;
+                    IF "DB".encoder_relative > #encoder_position_station_2 THEN
+                        "DB".timer_1s_in := 1;
+                        "DB".position_state := #position_station_2;
+                    END_IF;
+                ELSE
+                    "DB".station_1 := 1;
+                END_IF;
+            #position_station_2:
+                IF "DB".timer_1s_out = 0 THEN
+                    "motor_start" := 1;
+                    IF "DB".encoder_relative > #encoder_position_station_3 THEN
+                        "DB".timer_1s_in := 1;
+                        "DB".position_state := #position_station_3;
+                    END_IF;
+                ELSE
+                    "DB".station_2 := 1;
+                END_IF;
+            #position_station_3:
+                IF "DB".timer_1s_out = 0 THEN
+                    "motor_start" := 1;
+                    IF "DB".encoder_relative > #encoder_position_station_4 THEN
+                        "DB".timer_1s_in := 1;
+                        "DB".position_state := #position_station_4;
+                    END_IF;
+                ELSE
+                    "DB".station_3 := 1;
+                END_IF;
+            #position_station_4:
+                IF "DB".timer_1s_out = 0 THEN
+                    "motor_start" := 1;
+                    "motor_direction" := 1;
+                    IF "DB".encoder_relative < #encoder_position_station_3 THEN
+                        "DB".position_state := #position_abholpunkt;
+                    END_IF;
+                ELSE
+                    "DB".station_4 := 1;
+                END_IF;
+        END_CASE;
+    #betrieb_materialerkennung:
+        "motor_start" := 0;
+        "DB".timer_1s_in := 0;
+        CASE "DB".position_state OF
+            #position_abholpunkt:
+                "motor_start" := 1;
+                "motor_direction" := 0;
+                IF "DB".encoder_relative > #encoder_position_station_4 THEN
+                    "DB".timer_1s_in := 1;
+                    "DB".position_state := #position_station_4;
+                END_IF;
+            #position_station_4:
+                "DB".station_4 := 1;
+                IF "DB".timer_1s_out = 0 THEN
+                    IF "DB".material_state = #material_nicht_erkannt THEN
+                        IF "optischer_sensor" = 1 THEN
+                            "DB".material_state := #material_hell;
+                        ELSE
+                            "DB".material_state := #material_dunkel;
+                        END_IF;
+                    END_IF;
+                    "motor_start" := 1;
+                    "motor_direction" := 1;
+                    IF "DB".encoder_relative < #encoder_position_station_1 THEN
+                        "DB".timer_1s_in := 1;
+                        "DB".position_state := #position_station_1;
+                    END_IF;
+                ELSE
+                    "DB".station_4 := 1;
+                END_IF;
+            #position_station_1:
+                IF "induktiver_sensor_bereitschaft" = 0 OR
+                    "induktiver_sensor_gültig" = 0 THEN
+                    "DB".betrieb_state := #betrieb_stop;
+                    "DB".betrieb_state_before_stop := #betrieb_materialerkennung;
+                ELSIF "DB".timer_1s_out = 0 THEN
+                    IF "DB".material_state = #material_hell THEN
+                        IF "induktiver_sensor_erkannt" = 1 THEN
+                            "DB".material_state := #material_alu;
+                        ELSE
+                            "DB".material_state := #material_kunststoff_hell;
+                        END_IF;
+                    ELSIF "DB".material_state = #material_dunkel THEN
+                        IF "induktiver_sensor_erkannt" = 1 THEN
+                            "DB".material_state := #material_eisen;
+                        ELSE
+                            "DB".material_state := #material_kunststoff_dunkel;
+                        END_IF;
+                    END_IF;
+                ELSE
+                    "DB".station_1 := 1;
+                END_IF;
+        END_CASE;
+        
+        
+    #betrieb_beschichtung:
+        "motor_direction" := 0;
+        "zylinder_heben" := 0;
+        "zylinder_senken" := 0;
+        CASE "DB".position_state OF
+            #position_station_1:
+                // Vorbehandlung //
+                IF "DB".zylinder_state <> #zylinder_idle THEN
+                    "DB".station_1 := 1;
+                END_IF;
+                CASE "DB".zylinder_state OF
+                    #zylinder_reset:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu OR
+                            "DB".material_state = #material_kunststoff_hell OR
+                            "DB".material_state = #material_kunststoff_dunkel THEN//1s
+                            "DB".timer_1s_in := 1;
+                        ELSIF "DB".material_state = #material_eisen THEN//3s
+                            "DB".timer_3s_in := 1;
+                        END_IF;
+                        "DB".zylinder_state := #"zylinder_down";
+                    #zylinder_down:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu OR
+                            "DB".material_state = #material_kunststoff_hell OR
+                            "DB".material_state = #material_kunststoff_dunkel THEN//1s
+                            IF "DB".timer_1s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        ELSIF "DB".material_state = #material_eisen THEN//3s
+                            IF "DB".timer_3s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        END_IF;
+                    #zylinder_up:
+                        "zylinder_heben" := 1;
+                        IF "DB".timer_1s_out = 0 THEN
+                            "DB".zylinder_state := #zylinder_idle;
+                        END_IF;
+                    #zylinder_idle:
+                        "motor_start" := 1;
+                        IF "DB".encoder_relative > #encoder_position_station_2 THEN
+                            "DB".zylinder_state := #zylinder_reset;
+                            "DB".position_state := #position_station_2;
+                        END_IF;
+                END_CASE;
+            #position_station_2:
+                IF "DB".material_state <> #material_alu THEN//2s
+                    "DB".zylinder_state := #zylinder_idle;
+                END_IF;
+                IF "DB".zylinder_state <> #zylinder_idle THEN
+                    "DB".station_2 := 1;
+                END_IF;
+                CASE "DB".zylinder_state OF
+                    #zylinder_reset:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu THEN//2s
+                            "DB".timer_2s_in := 1;
+                        END_IF;
+                        "DB".zylinder_state := #"zylinder_down";
+                    #zylinder_down:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu THEN//2s
+                            IF "DB".timer_2s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        END_IF;
+                    #zylinder_up:
+                        "zylinder_heben" := 1;
+                        IF "DB".timer_1s_out = 0 THEN
+                            "DB".zylinder_state := #zylinder_idle;
+                        END_IF;
+                    #zylinder_idle:
+                        "motor_start" := 1;
+                        IF "DB".encoder_relative > #encoder_position_station_3 THEN
+                            "DB".zylinder_state := #zylinder_reset;
+                            "DB".position_state := #position_station_3;
+                        END_IF;
+                END_CASE;
+            #position_station_3:
+                IF "DB".material_state = #material_alu OR
+                    "DB".material_state = #material_eisen THEN
+                    "DB".zylinder_state := #zylinder_idle;
+                END_IF;
+                IF "DB".zylinder_state <> #zylinder_idle THEN
+                    "DB".station_3 := 1;
+                END_IF;
+                CASE "DB".zylinder_state OF
+                    #zylinder_reset:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_kunststoff_hell OR
+                            "DB".material_state = #material_kunststoff_dunkel THEN//1s
+                            "DB".timer_1s_in := 1;
+                        END_IF;
+                        "DB".zylinder_state := #"zylinder_down";
+                    #zylinder_down:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_kunststoff_hell OR
+                            "DB".material_state = #material_kunststoff_dunkel THEN//1s
+                            IF "DB".timer_1s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        END_IF;
+                    #zylinder_up:
+                        "zylinder_heben" := 1;
+                        IF "DB".timer_1s_out = 0 THEN
+                            "DB".zylinder_state := #zylinder_idle;
+                        END_IF;
+                    #zylinder_idle:
+                        IF "DB".material_state = #material_kunststoff_hell OR
+                            "DB".material_state = #material_kunststoff_dunkel THEN
+                            "DB".position_state := #position_abholpunkt;
+                            "DB".zylinder_state := #zylinder_reset;
+                        ELSE
+                            "motor_start" := 1;
+                            IF "DB".encoder_relative > #encoder_position_station_4 THEN
+                                "DB".zylinder_state := #zylinder_reset;
+                                "DB".position_state := #position_station_4;
+                            END_IF;
+                        END_IF;
+                END_CASE;
+            #position_station_4:
+                IF "DB".zylinder_state <> #zylinder_idle THEN
+                    "DB".station_4 := 1;
+                END_IF;
+                CASE "DB".zylinder_state OF
+                    #zylinder_reset:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu THEN//2s
+                            "DB".timer_2s_in := 1;
+                        ELSIF "DB".material_state = #material_eisen THEN//3s
+                            "DB".timer_3s_in := 1;
+                        END_IF;
+                        "DB".zylinder_state := #"zylinder_down";
+                    #zylinder_down:
+                        "zylinder_senken" := 1;
+                        IF "DB".material_state = #material_alu THEN//2s
+                            IF "DB".timer_2s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        ELSIF "DB".material_state = #material_eisen THEN//3s
+                            IF "DB".timer_3s_out = 0 THEN
+                                "DB".timer_1s_in := 1;
+                                "DB".zylinder_state := #zylinder_up;
+                            END_IF;
+                        END_IF;
+                    #zylinder_up:
+                        "zylinder_heben" := 1;
+                        IF "DB".timer_1s_out = 0 THEN
+                            "DB".zylinder_state := #zylinder_idle;
+                        END_IF;
+                    #zylinder_idle:
+                        "motor_start" := 1;
+                        "motor_direction" := 1;
+                        IF "DB".encoder_relative < #encoder_position_station_3 THEN
+                            "DB".zylinder_state := #zylinder_reset;
+                            "DB".position_state := #position_abholpunkt;
+                        END_IF;
+                END_CASE;
+        END_CASE;
+    #betrieb_manuell:
+        IF "joystick" > 16#0100 AND "joystick" < 16#7000 OR "Bedienung_HMI".schlitten_up = 1 THEN
+            "motor_direction" := 0;
+            "motor_start" := 1;
+        ELSIF "joystick" > 16#7000 AND "joystick" < 16#FF00 OR "Bedienung_HMI".schlitten_down = 1 THEN
+            "motor_direction" := 1;
+            "motor_start" := 1;
+        END_IF;
+        IF "taster_zylinder_senken" = 1 OR "Bedienung_HMI".zylinder_down = 1 THEN
+            "zylinder_senken" := 1;
+            "zylinder_heben" := 0;
+        ELSIF "taster_zylinder_heben" = 1 OR "Bedienung_HMI".zylinder_up = 1 THEN
+            "zylinder_heben" := 1;
+            "zylinder_senken" := 0;
+        ELSE
+            "zylinder_heben" := 0;
+            "zylinder_senken" := 0;
+        END_IF;
+END_CASE;
+
+
+// update betrieb state
+IF "switch_reset" = 1 OR "Bedienung_HMI".reset THEN
+    "DB".betrieb_state := #betrieb_idle;
+    "DB".material_state := #material_nicht_erkannt;
+    "DB".position_state := #position_undefiniert;
+    "DB".zylinder_state := #zylinder_reset;
+END_IF;
+CASE "DB".betrieb_state OF
+    #betrieb_idle:
+        // ***** Idle Betrieb ***** //
+        "DB".led_rot := 0;
+        "DB".led_gelb := 0;
+        "DB".led_grün := 1;
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_idle;
+        ELSIF "taster_start" = 1 OR "Bedienung_HMI".start = 1 THEN
+            "DB".betrieb_state := #betrieb_decoder_kalibrieren;
+            "DB".betrieb_state_before_stop := #betrieb_idle;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_idle;
+        END_IF;
+        
+    #betrieb_decoder_kalibrieren:
+        // ***** Decoder Kalibrieren Betrieb ***** //
+        "DB".led_rot := 0;
+        "DB".led_grün := 0;
+        "DB".led_gelb := "Clock_1Hz";
+        
+        "DB".encoder_reference := "encoder";
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_decoder_kalibrieren;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_decoder_kalibrieren;
+        ELSIF "schlitten_unten" = 1 THEN
+            "DB".betrieb_state := #betrieb_kontrollfahrt;
+            "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_kontrollfahrt;
+        END_IF;
+        
+    #betrieb_kontrollfahrt:
+        // ***** Kontrollfahrt Betrieb ***** //
+        "DB".led_rot := 0;
+        "DB".led_grün := 0;
+        "DB".led_gelb := 1;
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_kontrollfahrt;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_kontrollfahrt;
+        ELSE
+            IF "DB".position_state = #position_abholpunkt THEN
+                "DB".betrieb_state := #betrieb_warten_auf_werkstueck;
+                "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_warten_werkstück;
+            END_IF;
+        END_IF;
+        
+    #betrieb_warten_auf_werkstueck:
+        // ***** Warten auf Werkstueck ***** //
+        "DB".led_rot := 0;
+        "DB".led_grün := 0;
+        "DB".led_gelb := "Clock_1Hz";
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_warten_auf_werkstueck;
+        ELSIF "glasfaser_lichtschranke" = 1 THEN
+            IF "taster_start" = 1 OR "Bedienung_HMI".start = 1 THEN
+                "DB".betrieb_state := #betrieb_materialerkennung;
+                "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_materialerkennung;
+            END_IF;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_warten_auf_werkstueck;
+        END_IF;
+        
+    #betrieb_materialerkennung:
+        // ***** Warten auf Werkstueck ***** //
+        "DB".led_rot := 0;
+        "DB".led_grün := 0;
+        "DB".led_gelb := 1;
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_materialerkennung;
+        ELSIF "glasfaser_lichtschranke" = 0 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_materialerkennung;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_materialerkennung;
+        END_IF;
+        CASE "DB".material_state OF
+            #material_alu..#material_kunststoff_dunkel:
+                "DB".betrieb_state := #betrieb_beschichtung;
+                "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_beschichtung;
+        END_CASE;
+        
+    #betrieb_manuell:
+        // ***** Manuell Betrieb ***** //
+        "DB".led_gelb := 0;
+        "DB".led_grün := 0;
+        "DB".led_rot := "Clock_1Hz";
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+        ELSIF "switch_manual_betrieb" = 0 AND "Bedienung_HMI".manuell = 0 THEN
+            "DB".betrieb_state := "DB".betrieb_state_before_stop;
+        END_IF;
+    #betrieb_stop:
+        // ***** Fehler Betrieb ***** //
+        "DB".led_gelb := 0;
+        "DB".led_grün := 0;
+        "DB".led_rot := 1;
+        
+        IF "taster_start" = 1 OR "Bedienung_HMI".start = 1 THEN
+            "DB".betrieb_state := "DB".betrieb_state_before_stop;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+        END_IF;
+    #betrieb_beschichtung:
+        // ***** Kontrollfahrt Betrieb ***** //
+        "DB".led_rot := 0;
+        "DB".led_grün := 0;
+        "DB".led_gelb := 1;
+        
+        IF "taster_stop" = 1 OR "Bedienung_HMI".stop = 1 OR
+            "sicherungslichtschranke" = 1 THEN
+            "DB".betrieb_state := #betrieb_stop;
+            "DB".betrieb_state_before_stop := #betrieb_beschichtung;
+        ELSIF "switch_manual_betrieb" = 1 OR "Bedienung_HMI".manuell = 1 THEN
+            "DB".betrieb_state := #betrieb_manuell;
+            "DB".betrieb_state_before_stop := #betrieb_beschichtung;
+        ELSE
+            IF "DB".position_state = #position_abholpunkt THEN
+                "DB".material_state := #material_nicht_erkannt;
+                "DB".betrieb_state := #betrieb_warten_auf_werkstueck;
+            END_IF;
+        END_IF;
+    ELSE
+        ;
+END_CASE;
+
+
+
+
+// schlitten HMI
+IF "DB".betrieb_state = #betrieb_idle OR "DB".betrieb_state = #betrieb_decoder_kalibrieren THEN
+    "Bedienung_HMI".schlitten_position := 0;
+ELSE
+    "Bedienung_HMI".schlitten_position := "DB".encoder_relative * "Bedienung_HMI".schlitten_max / #encoder_position_station_4;
+END_IF;
+
+
+// material HMI
+CASE "DB".material_state OF
+    #material_nicht_erkannt:
+        "Bedienung_HMI".material_name := '';
+    #material_hell:
+        "Bedienung_HMI".material_name := 'hell';
+    #material_dunkel:
+        "Bedienung_HMI".material_name := 'dunkel';
+    #material_alu:
+        "Bedienung_HMI".material_name := 'alu';
+    #material_eisen:
+        "Bedienung_HMI".material_name := 'eisen';
+    #material_kunststoff_hell:
+        "Bedienung_HMI".material_name := 'kunststoff hell';
+    #material_kunststoff_dunkel:
+        "Bedienung_HMI".material_name := 'kunststoff dunkel';
+END_CASE;
+
+// betrieb HMI
+CASE "DB".betrieb_state OF
+    #betrieb_idle:
+        "Bedienung_HMI".betrieb_name := 'Idle';
+    #betrieb_decoder_kalibrieren:
+        "Bedienung_HMI".betrieb_name := 'Decoder kalibrieren';
+    #betrieb_kontrollfahrt:
+        "Bedienung_HMI".betrieb_name := 'Kontrollfahrt';
+    #betrieb_warten_auf_werkstueck:
+        "Bedienung_HMI".betrieb_name := 'Warten auf Werkstueck';
+    #betrieb_materialerkennung:
+        "Bedienung_HMI".betrieb_name := 'Materialerkennung';
+    #betrieb_beschichtung:
+        "Bedienung_HMI".betrieb_name := 'Beschichtung';
+    #betrieb_manuell:
+        "Bedienung_HMI".betrieb_name := 'Manuell';
+    #betrieb_stop:
+        "Bedienung_HMI".betrieb_name := 'Stop';
+END_CASE;
+
+
+// alarm HMI
+IF "sicherungslichtschranke" = 1 THEN
+    "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_lichtschranke;
+END_IF;
+IF "DB".betrieb_state = #betrieb_materialerkennung OR "DB".betrieb_state = #betrieb_beschichtung THEN
+    IF "glasfaser_lichtschranke" = 0 THEN
+        "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_werkstück_fehlt;
+    END_IF;
+END_IF;
+IF "DB".betrieb_state = #betrieb_materialerkennung AND "DB".position_state = #position_station_1 THEN
+    IF "induktiver_sensor_bereitschaft" = 0 OR "induktiver_sensor_gültig" = 0 THEN
+        "Bedienung_HMI".info_tag := "Bedienung_HMI".info_tag XOR #alarm_werkstück_fehlt;
+    END_IF;
+END_IF;
